@@ -585,34 +585,53 @@
                         if (!elements || elements.length === 0) continue;
 
                         const pageToSign = pages[pageNum - 1];
-                        const pdfHeight = pageToSign.getHeight();
+                        const rotationAngle = pageToSign.getRotation().angle;
+
+                        // Crear viewport de pdf.js para mapear coordenadas exactamente (incluyendo rotación)
+                        const pageForViewport = await pdfDocProxy.getPage(pageNum);
+                        const viewport = pageForViewport.getViewport({ scale: 1.0 });
 
                         for (const el of elements) {
                             if (el.type === 'signature') {
                                 const pngBytes = await fetch(el.dataUrl).then(res => res.arrayBuffer());
                                 const pngImage = await pdfDoc.embedPng(pngBytes);
-                                const sigY = pdfHeight - el.y - el.h; // PDFLib origen es abajo-izquierda
-                                pageToSign.drawImage(pngImage, { x: el.x, y: sigY, width: el.w, height: el.h });
+                                
+                                // 1. Encontrar la esquina inferior izquierda visual
+                                const vX = el.x;
+                                const vY = el.y + el.h;
+                                
+                                // 2. Mapear a coordenadas reales del PDF (des-rotadas)
+                                const [pdfX, pdfY] = viewport.convertToPdfPoint(vX, vY);
+
+                                pageToSign.drawImage(pngImage, { 
+                                    x: pdfX, 
+                                    y: pdfY, 
+                                    width: el.w, 
+                                    height: el.h,
+                                    rotate: window.PDFLib.degrees(rotationAngle) // Compensar la rotación nativa del PDF
+                                });
                             } 
                             else if (el.type === 'text') {
                                 const lines = el.text.split('\n');
                                 const font = await getFont(el.fontFamily, el.isBold, el.isItalic);
                                 const lineHeight = el.fontSize * 1.2;
                                 
-                                // Ajuste fino para la línea base de renderizado entre HTML y PDF
-                                // HTML posiciona desde arriba-izquierda. PDF dibuja texto desde su línea base (bottom-left).
-                                // Entonces restamos la altura de la fuente y ajustamos.
-                                let currentY = pdfHeight - el.y - (el.fontSize * 0.85);
-
                                 for (let i = 0; i < lines.length; i++) {
+                                    // 1. Calcular línea base visual para cada línea
+                                    const vX = el.x;
+                                    const vY = el.y + (i * lineHeight) + (el.fontSize * 0.85);
+                                    
+                                    // 2. Mapear a coordenadas reales
+                                    const [pdfX, pdfY] = viewport.convertToPdfPoint(vX, vY);
+
                                     pageToSign.drawText(lines[i], {
-                                        x: el.x,
-                                        y: currentY,
+                                        x: pdfX,
+                                        y: pdfY,
                                         size: el.fontSize,
                                         font: font,
                                         color: hexToRgbPdf(el.color),
+                                        rotate: window.PDFLib.degrees(rotationAngle) // Compensar rotación
                                     });
-                                    currentY -= lineHeight; // Bajar para la siguiente línea
                                 }
                             }
                         }
@@ -717,7 +736,7 @@
 
                     {/* Área de Trabajo */}
                     <main className="flex-1 overflow-auto bg-slate-200 p-4 md:p-8 relative custom-scroll h-[calc(100vh-64px)]" onClick={handleBackgroundClick}>
-                        <div className="min-h-full w-full flex items-start justify-center">
+                        <div className={`min-h-full w-full ${appMode === 'editor' ? 'block text-center' : 'flex items-start justify-center'}`}>
                             
                             {appMode === 'landing' && (
                                 // --- PANTALLA DE INICIO (LANDING) ---
@@ -854,7 +873,7 @@
                                 /* CONTENEDOR PDF */
                                 <div 
                                     ref={containerRef}
-                                    className="relative bg-white shadow-2xl ring-1 ring-gray-900/5 select-none origin-top"
+                                    className="relative bg-white shadow-2xl ring-1 ring-gray-900/5 select-none origin-top inline-block text-left align-top"
                                     style={{ width: pdfDimensions.width * zoom, height: pdfDimensions.height * zoom }}
                                 >
                                     <img src={pdfImage} alt="Documento" className="w-full h-full object-contain pointer-events-none" />
